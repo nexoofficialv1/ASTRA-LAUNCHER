@@ -504,6 +504,8 @@ private fun HomeScreen(
 
 @Composable
 private fun TopStatus(now: LocalDateTime, onRequestDefault: () -> Unit) {
+    val context = LocalContext.current
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -540,7 +542,6 @@ private fun TopStatus(now: LocalDateTime, onRequestDefault: () -> Unit) {
                 onRequestDefault()
             }
             RoundAction(icon = Icons.Default.Settings, contentDescription = "Home settings") {
-                val context = LocalContext.current
                 launchSafely(context, Intent(Settings.ACTION_HOME_SETTINGS))
             }
         }
