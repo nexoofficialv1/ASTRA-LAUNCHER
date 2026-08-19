@@ -146,6 +146,14 @@ private fun AstraLauncherApp() {
     var weatherError by remember { mutableStateOf<String?>(null) }
     var weather by remember { mutableStateOf<WeatherSnapshot?>(null) }
 
+    val launcherPreferences = remember {
+        context.getSharedPreferences("astra_launcher", android.content.Context.MODE_PRIVATE)
+    }
+    var homeStyle by remember {
+        mutableStateOf(HomeStyle.fromStorage(launcherPreferences.getString("home_style", null)))
+    }
+    var styleOpen by remember { mutableStateOf(false) }
+
     fun hasLocationPermission(): Boolean = locationService.hasLocationPermission()
 
     fun refreshWeather(forceNetwork: Boolean = false) {
@@ -261,7 +269,7 @@ private fun AstraLauncherApp() {
             is SearchAction.AiPlaceholder -> {
                 Toast.makeText(
                     context,
-                    "ASTRA AI cloud connector comes in v0.3. Local search is active now.",
+                    "ASTRA AI cloud connector is planned for the AI phase. Local search is active now.",
                     Toast.LENGTH_LONG
                 ).show()
             }
@@ -274,6 +282,7 @@ private fun AstraLauncherApp() {
             appsLoading = appsLoading,
             weather = weather,
             weatherLoading = weatherLoading,
+            homeStyle = homeStyle,
             onOpenDrawer = { drawerOpen = true },
             onOpenSearch = { searchOpen = true },
             onOpenWeather = {
@@ -281,7 +290,8 @@ private fun AstraLauncherApp() {
                 if (hasLocationPermission()) refreshWeather(forceNetwork = false)
             },
             onLaunchApp = { app -> launchApp(app.componentName) },
-            onRequestDefault = ::requestHomeRole
+            onRequestDefault = ::requestHomeRole,
+            onOpenStyleSettings = { styleOpen = true }
         )
 
         LauncherOverlay(
@@ -324,6 +334,22 @@ private fun AstraLauncherApp() {
                 onRefresh = { refreshWeather(forceNetwork = true) }
             )
         }
+
+        LauncherOverlay(
+            visible = styleOpen,
+            onClose = { styleOpen = false }
+        ) {
+            StyleChooserSheet(
+                current = homeStyle,
+                onClose = { styleOpen = false },
+                onSelect = { selected ->
+                    homeStyle = selected
+                    launcherPreferences.edit()
+                        .putString("home_style", selected.name)
+                        .apply()
+                }
+            )
+        }
     }
 }
 
@@ -350,11 +376,13 @@ private fun HomeScreen(
     appsLoading: Boolean,
     weather: WeatherSnapshot?,
     weatherLoading: Boolean,
+    homeStyle: HomeStyle,
     onOpenDrawer: () -> Unit,
     onOpenSearch: () -> Unit,
     onOpenWeather: () -> Unit,
     onLaunchApp: (LauncherApp) -> Unit,
-    onRequestDefault: () -> Unit
+    onRequestDefault: () -> Unit,
+    onOpenStyleSettings: () -> Unit
 ) {
     val context = LocalContext.current
     var dragAmount by remember { mutableFloatStateOf(0f) }
@@ -376,20 +404,70 @@ private fun HomeScreen(
                 )
             }
     ) {
-        Box(
-            modifier = Modifier
-                .width(310.dp)
-                .fillMaxHeight()
-                .align(Alignment.CenterEnd)
-                .offset(x = 105.dp)
-                .graphicsLayer(rotationZ = 9f)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(Color(0xFFFFB300), Color(0xFFFF6D00), Color(0xFFEF4A00))
-                    ),
-                    RoundedCornerShape(72.dp)
+        when (homeStyle) {
+            HomeStyle.EDGE -> {
+                Box(
+                    modifier = Modifier
+                        .width(310.dp)
+                        .fillMaxHeight()
+                        .align(Alignment.CenterEnd)
+                        .offset(x = 105.dp)
+                        .graphicsLayer(rotationZ = 9f)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color(0xFFFFB300), Color(0xFFFF6D00), Color(0xFFEF4A00))
+                            ),
+                            RoundedCornerShape(72.dp)
+                        )
                 )
-        )
+            }
+
+            HomeStyle.SPLIT -> {
+                Box(
+                    modifier = Modifier
+                        .width(138.dp)
+                        .fillMaxHeight()
+                        .align(Alignment.CenterEnd)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color(0xFFFFC247), Color(0xFFFF8A00), Color(0xFFEF5B00))
+                            )
+                        )
+                )
+                Box(
+                    modifier = Modifier
+                        .width(2.dp)
+                        .fillMaxHeight()
+                        .align(Alignment.CenterEnd)
+                        .offset(x = (-146).dp)
+                        .background(Color.White.copy(alpha = 0.12f))
+                )
+            }
+
+            HomeStyle.BOLD -> {
+                Box(
+                    modifier = Modifier
+                        .size(360.dp)
+                        .align(Alignment.TopEnd)
+                        .offset(x = 170.dp, y = (-105).dp)
+                        .background(
+                            Brush.radialGradient(
+                                listOf(Color(0x66FF9800), Color(0x18FF6D00), Color.Transparent)
+                            ),
+                            CircleShape
+                        )
+                )
+                Box(
+                    modifier = Modifier
+                        .width(110.dp)
+                        .height(6.dp)
+                        .align(Alignment.CenterStart)
+                        .offset(x = 22.dp, y = (-34).dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFFFA000))
+                )
+            }
+        }
 
         Box(
             modifier = Modifier
@@ -413,7 +491,12 @@ private fun HomeScreen(
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
-                TopStatus(now = now, onRequestDefault = onRequestDefault)
+                TopStatus(
+                    now = now,
+                    homeStyle = homeStyle,
+                    onRequestDefault = onRequestDefault,
+                    onOpenStyleSettings = onOpenStyleSettings
+                )
                 Spacer(Modifier.height(20.dp))
 
                 Row(
@@ -421,46 +504,13 @@ private fun HomeScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.Top
                 ) {
-                    Column(modifier = Modifier.fillMaxWidth(0.66f)) {
-                        WeatherCompact(
-                            weather = weather,
-                            loading = weatherLoading,
-                            onClick = onOpenWeather
-                        )
-
-                        Spacer(Modifier.height(26.dp))
-
-                        Text(
-                            text = now.format(DateTimeFormatter.ofPattern("HH")),
-                            color = Color.White,
-                            fontSize = 78.sp,
-                            lineHeight = 76.sp,
-                            fontWeight = FontWeight.Light
-                        )
-                        Text(
-                            text = now.format(DateTimeFormatter.ofPattern("mm")),
-                            color = Color.White.copy(alpha = 0.44f),
-                            fontSize = 66.sp,
-                            lineHeight = 64.sp,
-                            fontWeight = FontWeight.Light
-                        )
-
-                        Spacer(Modifier.height(14.dp))
-
-                        Text(
-                            text = now.format(DateTimeFormatter.ofPattern("EEEE", Locale.getDefault())).uppercase(),
-                            color = Color.White.copy(alpha = 0.82f),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            letterSpacing = 1.6.sp
-                        )
-                        Text(
-                            text = now.format(DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.getDefault())).uppercase(),
-                            color = Color.White.copy(alpha = 0.48f),
-                            fontSize = 12.sp,
-                            letterSpacing = 1.1.sp
-                        )
-                    }
+                    HomeTimeBlock(
+                        now = now,
+                        weather = weather,
+                        weatherLoading = weatherLoading,
+                        homeStyle = homeStyle,
+                        onOpenWeather = onOpenWeather
+                    )
 
                     EdgeAppRail(
                         apps = edgeApps,
@@ -503,9 +553,12 @@ private fun HomeScreen(
 }
 
 @Composable
-private fun TopStatus(now: LocalDateTime, onRequestDefault: () -> Unit) {
-    val context = LocalContext.current
-
+private fun TopStatus(
+    now: LocalDateTime,
+    homeStyle: HomeStyle,
+    onRequestDefault: () -> Unit,
+    onOpenStyleSettings: () -> Unit
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -528,7 +581,7 @@ private fun TopStatus(now: LocalDateTime, onRequestDefault: () -> Unit) {
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "EDGE",
+                    text = homeStyle.label,
                     color = Color(0xFFFFA000),
                     fontWeight = FontWeight.SemiBold,
                     letterSpacing = 1.8.sp,
@@ -541,8 +594,262 @@ private fun TopStatus(now: LocalDateTime, onRequestDefault: () -> Unit) {
             RoundAction(icon = Icons.Default.Tune, contentDescription = "Set default") {
                 onRequestDefault()
             }
-            RoundAction(icon = Icons.Default.Settings, contentDescription = "Home settings") {
-                launchSafely(context, Intent(Settings.ACTION_HOME_SETTINGS))
+            RoundAction(icon = Icons.Default.Settings, contentDescription = "ASTRA style settings") {
+                onOpenStyleSettings()
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeTimeBlock(
+    now: LocalDateTime,
+    weather: WeatherSnapshot?,
+    weatherLoading: Boolean,
+    homeStyle: HomeStyle,
+    onOpenWeather: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth(0.66f)) {
+        WeatherCompact(
+            weather = weather,
+            loading = weatherLoading,
+            onClick = onOpenWeather
+        )
+
+        Spacer(Modifier.height(if (homeStyle == HomeStyle.BOLD) 18.dp else 26.dp))
+
+        when (homeStyle) {
+            HomeStyle.EDGE -> {
+                Text(
+                    text = now.format(DateTimeFormatter.ofPattern("HH")),
+                    color = Color.White,
+                    fontSize = 78.sp,
+                    lineHeight = 76.sp,
+                    fontWeight = FontWeight.Light
+                )
+                Text(
+                    text = now.format(DateTimeFormatter.ofPattern("mm")),
+                    color = Color.White.copy(alpha = 0.44f),
+                    fontSize = 66.sp,
+                    lineHeight = 64.sp,
+                    fontWeight = FontWeight.Light
+                )
+
+                Spacer(Modifier.height(14.dp))
+
+                Text(
+                    text = now.format(DateTimeFormatter.ofPattern("EEEE", Locale.getDefault())).uppercase(),
+                    color = Color.White.copy(alpha = 0.82f),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 1.6.sp
+                )
+                Text(
+                    text = now.format(DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.getDefault())).uppercase(),
+                    color = Color.White.copy(alpha = 0.48f),
+                    fontSize = 12.sp,
+                    letterSpacing = 1.1.sp
+                )
+            }
+
+            HomeStyle.SPLIT -> {
+                Text(
+                    text = now.format(DateTimeFormatter.ofPattern("HH:mm")),
+                    color = Color.White,
+                    fontSize = 58.sp,
+                    lineHeight = 61.sp,
+                    fontWeight = FontWeight.Light
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = now.format(DateTimeFormatter.ofPattern("EEEE", Locale.getDefault())).uppercase(),
+                    color = Color(0xFFFFB12B),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.8.sp
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = now.format(DateTimeFormatter.ofPattern("dd MMM", Locale.getDefault())).uppercase(),
+                    color = Color.White.copy(alpha = 0.78f),
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = now.format(DateTimeFormatter.ofPattern("yyyy")),
+                    color = Color.White.copy(alpha = 0.30f),
+                    fontSize = 16.sp,
+                    letterSpacing = 3.sp
+                )
+            }
+
+            HomeStyle.BOLD -> {
+                Text(
+                    text = now.format(DateTimeFormatter.ofPattern("dd")),
+                    color = Color.White,
+                    fontSize = 104.sp,
+                    lineHeight = 100.sp,
+                    fontWeight = FontWeight.Light
+                )
+                Text(
+                    text = now.format(DateTimeFormatter.ofPattern("MMM", Locale.getDefault())).uppercase(),
+                    color = Color(0xFFFFA000),
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 3.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = now.format(DateTimeFormatter.ofPattern("HH:mm")),
+                    color = Color.White.copy(alpha = 0.82f),
+                    fontSize = 30.sp,
+                    fontWeight = FontWeight.Light
+                )
+                Text(
+                    text = now.format(DateTimeFormatter.ofPattern("EEEE · yyyy", Locale.getDefault())).uppercase(),
+                    color = Color.White.copy(alpha = 0.38f),
+                    fontSize = 10.sp,
+                    letterSpacing = 1.2.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StyleChooserSheet(
+    current: HomeStyle,
+    onClose: () -> Unit,
+    onSelect: (HomeStyle) -> Unit
+) {
+    val context = LocalContext.current
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF090A0D).copy(alpha = 0.995f))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 18.dp, vertical = 10.dp)
+        ) {
+            SheetHandle()
+            Spacer(Modifier.height(18.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "ASTRA Style",
+                        color = Color.White,
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Choose your home-screen identity",
+                        color = Color(0xFFFFA000).copy(alpha = 0.9f),
+                        fontSize = 11.sp,
+                        letterSpacing = 0.7.sp
+                    )
+                }
+                RoundAction(Icons.Default.Close, "Close", onClose)
+            }
+
+            Spacer(Modifier.height(22.dp))
+
+            HomeStyle.values().forEach { style ->
+                val selected = current == style
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(24.dp))
+                        .background(
+                            if (selected) Color(0xFFFFA000).copy(alpha = 0.17f)
+                            else Color.White.copy(alpha = 0.055f)
+                        )
+                        .clickable { onSelect(style) }
+                        .padding(18.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "ASTRA ${style.label}",
+                                color = Color.White,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = style.description,
+                                color = Color.White.copy(alpha = 0.45f),
+                                fontSize = 11.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (selected) Color(0xFFFFA000)
+                                    else Color.White.copy(alpha = 0.08f)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (selected) "✓" else "→",
+                                color = if (selected) Color(0xFF171007) else Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(Color.White.copy(alpha = 0.045f))
+                    .clickable {
+                        launchSafely(context, Intent(Settings.ACTION_HOME_SETTINGS))
+                    }
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.Settings,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.72f),
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text(
+                        "Android Home settings",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        "Default launcher and system home options",
+                        color = Color.White.copy(alpha = 0.34f),
+                        fontSize = 10.sp
+                    )
+                }
             }
         }
     }
@@ -1339,6 +1646,29 @@ private fun RoundAction(
             tint = Color.White.copy(alpha = 0.76f),
             modifier = Modifier.size(18.dp)
         )
+    }
+}
+
+private enum class HomeStyle(
+    val label: String,
+    val description: String
+) {
+    EDGE(
+        label = "EDGE",
+        description = "Asymmetric vertical clock with a strong edge rail."
+    ),
+    SPLIT(
+        label = "SPLIT",
+        description = "Structured two-zone layout with a clean information panel."
+    ),
+    BOLD(
+        label = "BOLD",
+        description = "Oversized editorial date and minimal visual hierarchy."
+    );
+
+    companion object {
+        fun fromStorage(value: String?): HomeStyle =
+            values().firstOrNull { it.name == value } ?: EDGE
     }
 }
 
