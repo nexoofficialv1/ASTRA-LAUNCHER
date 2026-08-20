@@ -2,6 +2,7 @@ package com.nexoofficial.astralauncher
 
 import android.Manifest
 import android.app.role.RoleManager
+import android.app.WallpaperManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -153,6 +154,21 @@ private fun AstraLauncherApp() {
         mutableStateOf(HomeStyle.fromStorage(launcherPreferences.getString("home_style", null)))
     }
     var styleOpen by remember { mutableStateOf(false) }
+    var railIds by remember {
+        mutableStateOf(readRailIds(launcherPreferences.getString("rail_ids", null)))
+    }
+    var drawerColumns by remember {
+        mutableStateOf(launcherPreferences.getInt("drawer_columns", 4).coerceIn(3, 5))
+    }
+    var drawerIconSizeDp by remember {
+        mutableStateOf(launcherPreferences.getInt("drawer_icon_size_dp", 48).coerceIn(42, 56))
+    }
+    var adaptiveAccent by remember {
+        mutableStateOf(launcherPreferences.getBoolean("adaptive_accent", true))
+    }
+    val accentColor = remember(adaptiveAccent) {
+        if (adaptiveAccent) resolveWallpaperAccent(context) else Color(0xFFFFA000)
+    }
 
     fun hasLocationPermission(): Boolean = locationService.hasLocationPermission()
 
@@ -190,6 +206,15 @@ private fun AstraLauncherApp() {
         apps.clear()
         apps.addAll(loaded)
         appsLoading = false
+
+        if (railIds.isEmpty()) {
+            railIds = selectEdgeApps(loaded)
+                .map { it.componentName.flattenToString() }
+                .take(6)
+            launcherPreferences.edit()
+                .putString("rail_ids", railIds.joinToString(","))
+                .apply()
+        }
 
         weather = weatherRepository.cached()
         if (hasLocationPermission()) refreshWeather(forceNetwork = false)
@@ -283,6 +308,8 @@ private fun AstraLauncherApp() {
             weather = weather,
             weatherLoading = weatherLoading,
             homeStyle = homeStyle,
+            railIds = railIds,
+            accentColor = accentColor,
             onOpenDrawer = { drawerOpen = true },
             onOpenSearch = { searchOpen = true },
             onOpenWeather = {
@@ -300,6 +327,8 @@ private fun AstraLauncherApp() {
         ) {
             AppDrawer(
                 apps = apps,
+                gridColumns = drawerColumns,
+                iconSizeDp = drawerIconSizeDp,
                 onClose = { drawerOpen = false },
                 onLaunch = { app ->
                     drawerOpen = false
@@ -341,11 +370,49 @@ private fun AstraLauncherApp() {
         ) {
             StyleChooserSheet(
                 current = homeStyle,
+                apps = apps,
+                railIds = railIds,
+                drawerColumns = drawerColumns,
+                drawerIconSizeDp = drawerIconSizeDp,
+                adaptiveAccent = adaptiveAccent,
+                accentColor = accentColor,
                 onClose = { styleOpen = false },
                 onSelect = { selected ->
                     homeStyle = selected
                     launcherPreferences.edit()
                         .putString("home_style", selected.name)
+                        .apply()
+                },
+                onRailChange = { selected ->
+                    if (selected.size <= 6) {
+                        railIds = selected
+                        launcherPreferences.edit()
+                            .putString("rail_ids", selected.joinToString(","))
+                            .apply()
+                    } else {
+                        Toast.makeText(
+                            context,
+                            "App Rail supports up to 6 apps.",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                },
+                onDrawerColumnsChange = { columns ->
+                    drawerColumns = columns.coerceIn(3, 5)
+                    launcherPreferences.edit()
+                        .putInt("drawer_columns", drawerColumns)
+                        .apply()
+                },
+                onDrawerIconSizeChange = { sizeDp ->
+                    drawerIconSizeDp = sizeDp.coerceIn(42, 56)
+                    launcherPreferences.edit()
+                        .putInt("drawer_icon_size_dp", drawerIconSizeDp)
+                        .apply()
+                },
+                onAdaptiveAccentChange = { enabled ->
+                    adaptiveAccent = enabled
+                    launcherPreferences.edit()
+                        .putBoolean("adaptive_accent", enabled)
                         .apply()
                 }
             )
@@ -377,6 +444,8 @@ private fun HomeScreen(
     weather: WeatherSnapshot?,
     weatherLoading: Boolean,
     homeStyle: HomeStyle,
+    railIds: List<String>,
+    accentColor: Color,
     onOpenDrawer: () -> Unit,
     onOpenSearch: () -> Unit,
     onOpenWeather: () -> Unit,
@@ -387,7 +456,7 @@ private fun HomeScreen(
     val context = LocalContext.current
     var dragAmount by remember { mutableFloatStateOf(0f) }
     val now = rememberClock()
-    val edgeApps = remember(apps) { selectEdgeApps(apps) }
+    val edgeApps = remember(apps, railIds) { resolveRailApps(apps, railIds) }
 
     Box(
         modifier = Modifier
@@ -415,7 +484,7 @@ private fun HomeScreen(
                         .graphicsLayer(rotationZ = 9f)
                         .background(
                             Brush.verticalGradient(
-                                listOf(Color(0xFFFFB300), Color(0xFFFF6D00), Color(0xFFEF4A00))
+                                listOf(accentColor, accentColor.copy(alpha = 0.82f), Color(0xFFEF4A00))
                             ),
                             RoundedCornerShape(72.dp)
                         )
@@ -430,7 +499,7 @@ private fun HomeScreen(
                         .align(Alignment.CenterEnd)
                         .background(
                             Brush.verticalGradient(
-                                listOf(Color(0xFFFFC247), Color(0xFFFF8A00), Color(0xFFEF5B00))
+                                listOf(accentColor.copy(alpha = 0.92f), accentColor, Color(0xFFEF5B00))
                             )
                         )
                 )
@@ -452,7 +521,7 @@ private fun HomeScreen(
                         .offset(x = 170.dp, y = (-105).dp)
                         .background(
                             Brush.radialGradient(
-                                listOf(Color(0x66FF9800), Color(0x18FF6D00), Color.Transparent)
+                                listOf(accentColor.copy(alpha = 0.42f), accentColor.copy(alpha = 0.10f), Color.Transparent)
                             ),
                             CircleShape
                         )
@@ -494,6 +563,7 @@ private fun HomeScreen(
                 TopStatus(
                     now = now,
                     homeStyle = homeStyle,
+                    accentColor = accentColor,
                     onRequestDefault = onRequestDefault,
                     onOpenStyleSettings = onOpenStyleSettings
                 )
@@ -509,6 +579,7 @@ private fun HomeScreen(
                         weather = weather,
                         weatherLoading = weatherLoading,
                         homeStyle = homeStyle,
+                        accentColor = accentColor,
                         onOpenWeather = onOpenWeather
                     )
 
@@ -556,6 +627,7 @@ private fun HomeScreen(
 private fun TopStatus(
     now: LocalDateTime,
     homeStyle: HomeStyle,
+    accentColor: Color,
     onRequestDefault: () -> Unit,
     onOpenStyleSettings: () -> Unit
 ) {
@@ -582,7 +654,7 @@ private fun TopStatus(
                 Spacer(Modifier.width(8.dp))
                 Text(
                     text = homeStyle.label,
-                    color = Color(0xFFFFA000),
+                    color = accentColor,
                     fontWeight = FontWeight.SemiBold,
                     letterSpacing = 1.8.sp,
                     fontSize = 10.sp
@@ -607,6 +679,7 @@ private fun HomeTimeBlock(
     weather: WeatherSnapshot?,
     weatherLoading: Boolean,
     homeStyle: HomeStyle,
+    accentColor: Color,
     onOpenWeather: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth(0.66f)) {
@@ -663,7 +736,7 @@ private fun HomeTimeBlock(
                 Spacer(Modifier.height(12.dp))
                 Text(
                     text = now.format(DateTimeFormatter.ofPattern("EEEE", Locale.getDefault())).uppercase(),
-                    color = Color(0xFFFFB12B),
+                    color = accentColor,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.8.sp
@@ -693,7 +766,7 @@ private fun HomeTimeBlock(
                 )
                 Text(
                     text = now.format(DateTimeFormatter.ofPattern("MMM", Locale.getDefault())).uppercase(),
-                    color = Color(0xFFFFA000),
+                    color = accentColor,
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Black,
                     letterSpacing = 3.sp
@@ -719,8 +792,18 @@ private fun HomeTimeBlock(
 @Composable
 private fun StyleChooserSheet(
     current: HomeStyle,
+    apps: List<LauncherApp>,
+    railIds: List<String>,
+    drawerColumns: Int,
+    drawerIconSizeDp: Int,
+    adaptiveAccent: Boolean,
+    accentColor: Color,
     onClose: () -> Unit,
-    onSelect: (HomeStyle) -> Unit
+    onSelect: (HomeStyle) -> Unit,
+    onRailChange: (List<String>) -> Unit,
+    onDrawerColumnsChange: (Int) -> Unit,
+    onDrawerIconSizeChange: (Int) -> Unit,
+    onAdaptiveAccentChange: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
 
@@ -729,129 +812,240 @@ private fun StyleChooserSheet(
             .fillMaxSize()
             .background(Color(0xFF090A0D).copy(alpha = 0.995f))
     ) {
-        Column(
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .padding(horizontal = 18.dp, vertical = 10.dp)
+                .padding(horizontal = 18.dp),
+            contentPadding = PaddingValues(top = 10.dp, bottom = 36.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            SheetHandle()
-            Spacer(Modifier.height(18.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "ASTRA Style",
-                        color = Color.White,
-                        fontSize = 28.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = "Choose your home-screen identity",
-                        color = Color(0xFFFFA000).copy(alpha = 0.9f),
-                        fontSize = 11.sp,
-                        letterSpacing = 0.7.sp
-                    )
+            item {
+                SheetHandle()
+                Spacer(Modifier.height(18.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("ASTRA Customize", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Style · Rail · Grid · Adaptive accent",
+                            color = accentColor.copy(alpha = 0.92f),
+                            fontSize = 11.sp,
+                            letterSpacing = 0.7.sp
+                        )
+                    }
+                    RoundAction(Icons.Default.Close, "Close", onClose)
                 }
-                RoundAction(Icons.Default.Close, "Close", onClose)
+                Spacer(Modifier.height(12.dp))
             }
 
-            Spacer(Modifier.height(22.dp))
+            item { SettingsSectionLabel("HOME STYLE") }
 
-            HomeStyle.values().forEach { style ->
+            items(HomeStyle.values().toList(), key = { "style_${it.name}" }) { style ->
                 val selected = current == style
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(24.dp))
-                        .background(
-                            if (selected) Color(0xFFFFA000).copy(alpha = 0.17f)
-                            else Color.White.copy(alpha = 0.055f)
+                SettingsCard(selected, accentColor, { onSelect(style) }) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("ASTRA ${style.label}", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(3.dp))
+                        Text(style.description, color = Color.White.copy(alpha = 0.43f), fontSize = 11.sp, lineHeight = 16.sp)
+                    }
+                    SelectionBadge(selected, accentColor)
+                }
+            }
+
+            item {
+                Spacer(Modifier.height(6.dp))
+                SettingsSectionLabel("ADAPTIVE ACCENT")
+                Spacer(Modifier.height(8.dp))
+                SettingsCard(adaptiveAccent, accentColor, { onAdaptiveAccentChange(!adaptiveAccent) }) {
+                    Box(Modifier.size(42.dp).clip(CircleShape).background(accentColor))
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Wallpaper adaptive color", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        Text(
+                            if (adaptiveAccent) "ASTRA is sampling your system wallpaper accent."
+                            else "ASTRA orange is locked as the accent.",
+                            color = Color.White.copy(alpha = 0.38f),
+                            fontSize = 10.sp
                         )
-                        .clickable { onSelect(style) }
-                        .padding(18.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "ASTRA ${style.label}",
-                                color = Color.White,
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = style.description,
-                                color = Color.White.copy(alpha = 0.45f),
-                                fontSize = 11.sp,
-                                lineHeight = 16.sp
-                            )
-                        }
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    if (selected) Color(0xFFFFA000)
-                                    else Color.White.copy(alpha = 0.08f)
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = if (selected) "✓" else "→",
-                                color = if (selected) Color(0xFF171007) else Color.White,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
+                    }
+                    SelectionBadge(adaptiveAccent, accentColor)
+                }
+            }
+
+            item {
+                Spacer(Modifier.height(6.dp))
+                SettingsSectionLabel("APP DRAWER GRID")
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(3, 4, 5).forEach { columns ->
+                        ChoiceChip(
+                            label = "$columns columns",
+                            selected = drawerColumns == columns,
+                            accentColor = accentColor,
+                            modifier = Modifier.weight(1f)
+                        ) { onDrawerColumnsChange(columns) }
                     }
                 }
                 Spacer(Modifier.height(10.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(42 to "Compact", 48 to "Normal", 56 to "Large").forEach { (size, label) ->
+                        ChoiceChip(
+                            label = label,
+                            selected = drawerIconSizeDp == size,
+                            accentColor = accentColor,
+                            modifier = Modifier.weight(1f)
+                        ) { onDrawerIconSizeChange(size) }
+                    }
+                }
             }
 
-            Spacer(Modifier.height(8.dp))
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(Color.White.copy(alpha = 0.045f))
-                    .clickable {
-                        launchSafely(context, Intent(Settings.ACTION_HOME_SETTINGS))
-                    }
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.Default.Settings,
-                    contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.72f),
-                    modifier = Modifier.size(20.dp)
+            item {
+                Spacer(Modifier.height(8.dp))
+                SettingsSectionLabel("EDGE APP RAIL · MAX 6")
+                Spacer(Modifier.height(5.dp))
+                Text(
+                    "${railIds.size}/6 selected · Tap an app to add or remove it",
+                    color = Color.White.copy(alpha = 0.38f),
+                    fontSize = 10.sp
                 )
-                Spacer(Modifier.width(12.dp))
-                Column {
-                    Text(
-                        "Android Home settings",
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium
+            }
+
+            items(apps, key = { "rail_${it.componentName.flattenToString()}" }) { app ->
+                val id = app.componentName.flattenToString()
+                val selected = railIds.contains(id)
+
+                SettingsCard(selected, accentColor, {
+                    val next = if (selected) {
+                        railIds.filterNot { it == id }
+                    } else {
+                        if (railIds.size >= 6) {
+                            Toast.makeText(context, "Remove one App Rail item first.", Toast.LENGTH_SHORT).show()
+                            railIds
+                        } else railIds + id
+                    }
+                    if (next != railIds) onRailChange(next)
+                }) {
+                    Image(
+                        bitmap = app.icon,
+                        contentDescription = app.label,
+                        modifier = Modifier.size(38.dp).clip(RoundedCornerShape(10.dp))
                     )
-                    Text(
-                        "Default launcher and system home options",
-                        color = Color.White.copy(alpha = 0.34f),
-                        fontSize = 10.sp
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            app.label,
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            app.packageName,
+                            color = Color.White.copy(alpha = 0.30f),
+                            fontSize = 9.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    SelectionBadge(selected, accentColor)
+                }
+            }
+
+            item {
+                Spacer(Modifier.height(8.dp))
+                SettingsSectionLabel("SYSTEM")
+                Spacer(Modifier.height(8.dp))
+                SettingsCard(false, accentColor, {
+                    launchSafely(context, Intent(Settings.ACTION_HOME_SETTINGS))
+                }) {
+                    Icon(
+                        Icons.Default.Settings,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.72f),
+                        modifier = Modifier.size(20.dp)
                     )
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Android Home settings", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text("Default launcher and system home options", color = Color.White.copy(alpha = 0.34f), fontSize = 10.sp)
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SettingsSectionLabel(text: String) {
+    Text(text, color = Color.White.copy(alpha = 0.34f), fontSize = 9.sp, letterSpacing = 1.5.sp)
+}
+
+@Composable
+private fun SettingsCard(
+    selected: Boolean,
+    accentColor: Color,
+    onClick: () -> Unit,
+    content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(if (selected) accentColor.copy(alpha = 0.14f) else Color.White.copy(alpha = 0.05f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        content = content
+    )
+}
+
+@Composable
+private fun SelectionBadge(selected: Boolean, accentColor: Color) {
+    Box(
+        modifier = Modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .background(if (selected) accentColor else Color.White.copy(alpha = 0.07f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            if (selected) "✓" else "+",
+            color = if (selected) Color(0xFF171007) else Color.White.copy(alpha = 0.66f),
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp
+        )
+    }
+}
+
+@Composable
+private fun ChoiceChip(
+    label: String,
+    selected: Boolean,
+    accentColor: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(if (selected) accentColor else Color.White.copy(alpha = 0.055f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 11.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            color = if (selected) Color(0xFF171007) else Color.White.copy(alpha = 0.76f),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
@@ -1047,6 +1241,8 @@ private fun DockButton(
 @Composable
 private fun AppDrawer(
     apps: List<LauncherApp>,
+    gridColumns: Int,
+    iconSizeDp: Int,
     onClose: () -> Unit,
     onLaunch: (LauncherApp) -> Unit
 ) {
@@ -1112,14 +1308,14 @@ private fun AppDrawer(
             Spacer(Modifier.height(18.dp))
 
             LazyVerticalGrid(
-                columns = GridCells.Fixed(4),
+                columns = GridCells.Fixed(gridColumns.coerceIn(3, 5)),
                 modifier = Modifier.fillMaxHeight(),
                 contentPadding = PaddingValues(bottom = 32.dp),
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalArrangement = Arrangement.spacedBy(22.dp)
             ) {
                 items(filtered, key = { it.componentName.flattenToString() }) { app ->
-                    HomeAppIcon(app = app, onClick = { onLaunch(app) })
+                    HomeAppIcon(app = app, iconSizeDp = iconSizeDp, onClick = { onLaunch(app) })
                 }
             }
         }
@@ -1590,7 +1786,11 @@ private fun WeatherMetric(label: String, value: String, modifier: Modifier = Mod
 }
 
 @Composable
-private fun HomeAppIcon(app: LauncherApp, onClick: () -> Unit) {
+private fun HomeAppIcon(
+    app: LauncherApp,
+    iconSizeDp: Int = 48,
+    onClick: () -> Unit
+) {
     Column(
         modifier = Modifier.clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -1599,7 +1799,7 @@ private fun HomeAppIcon(app: LauncherApp, onClick: () -> Unit) {
             bitmap = app.icon,
             contentDescription = app.label,
             modifier = Modifier
-                .size(48.dp)
+                .size(iconSizeDp.dp)
                 .clip(RoundedCornerShape(13.dp))
         )
         Spacer(Modifier.height(6.dp))
@@ -1682,6 +1882,50 @@ private fun rememberClock(): LocalDateTime {
         }
     }
     return now
+}
+
+private fun readRailIds(raw: String?): List<String> =
+    raw.orEmpty()
+        .split(",")
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
+        .take(6)
+
+private fun resolveRailApps(
+    apps: List<LauncherApp>,
+    railIds: List<String>
+): List<LauncherApp> {
+    if (railIds.isEmpty()) return selectEdgeApps(apps)
+
+    val byId = apps.associateBy { it.componentName.flattenToString() }
+    val selected = railIds.mapNotNull { byId[it] }.toMutableList()
+
+    if (selected.size < 6) {
+        selectEdgeApps(apps).forEach { app ->
+            if (selected.size >= 6) return@forEach
+            if (selected.none { it.componentName == app.componentName }) selected += app
+        }
+    }
+    return selected.take(6)
+}
+
+private fun resolveWallpaperAccent(context: android.content.Context): Color {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+        runCatching {
+            val primary = WallpaperManager.getInstance(context)
+                .getWallpaperColors(WallpaperManager.FLAG_SYSTEM)
+                ?.primaryColor
+                ?: return@runCatching null
+
+            val hsv = FloatArray(3)
+            android.graphics.Color.colorToHSV(primary.toArgb(), hsv)
+            hsv[1] = hsv[1].coerceAtLeast(0.48f)
+            hsv[2] = hsv[2].coerceAtLeast(0.72f)
+            Color(android.graphics.Color.HSVToColor(hsv))
+        }.getOrNull()?.let { return it }
+    }
+    return Color(0xFFFFA000)
 }
 
 private fun greeting(hour: Int): String = when (hour) {
