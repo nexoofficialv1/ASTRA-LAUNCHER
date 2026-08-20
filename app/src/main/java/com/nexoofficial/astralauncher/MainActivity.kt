@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.provider.Settings
 import android.widget.Toast
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -104,6 +105,7 @@ import com.nexoofficial.astralauncher.ui.theme.AstraLauncherTheme
 import com.nexoofficial.astralauncher.weather.LocationService
 import com.nexoofficial.astralauncher.weather.WeatherCodeMapper
 import com.nexoofficial.astralauncher.weather.WeatherRepository
+import com.nexoofficial.astralauncher.wallpaper.WallpaperSettingsSheet
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -117,6 +119,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER)
+        window.setBackgroundDrawableResource(android.R.color.transparent)
         setContent {
             AstraLauncherTheme {
                 AstraLauncherApp()
@@ -154,6 +158,15 @@ private fun AstraLauncherApp() {
         mutableStateOf(HomeStyle.fromStorage(launcherPreferences.getString("home_style", null)))
     }
     var styleOpen by remember { mutableStateOf(false) }
+    var wallpaperOpen by remember { mutableStateOf(false) }
+    var wallpaperDimPercent by remember {
+        mutableStateOf(
+            launcherPreferences.getInt("wallpaper_dim_percent", 34)
+                .coerceIn(0, 70)
+        )
+    }
+    var wallpaperRevision by remember { mutableStateOf(0) }
+
     var railIds by remember {
         mutableStateOf(readRailIds(launcherPreferences.getString("rail_ids", null)))
     }
@@ -166,7 +179,7 @@ private fun AstraLauncherApp() {
     var adaptiveAccent by remember {
         mutableStateOf(launcherPreferences.getBoolean("adaptive_accent", true))
     }
-    val accentColor = remember(adaptiveAccent) {
+    val accentColor = remember(adaptiveAccent, wallpaperRevision) {
         if (adaptiveAccent) resolveWallpaperAccent(context) else Color(0xFFFFA000)
     }
 
@@ -310,6 +323,7 @@ private fun AstraLauncherApp() {
             homeStyle = homeStyle,
             railIds = railIds,
             accentColor = accentColor,
+            wallpaperDimPercent = wallpaperDimPercent,
             onOpenDrawer = { drawerOpen = true },
             onOpenSearch = { searchOpen = true },
             onOpenWeather = {
@@ -376,6 +390,10 @@ private fun AstraLauncherApp() {
                 drawerIconSizeDp = drawerIconSizeDp,
                 adaptiveAccent = adaptiveAccent,
                 accentColor = accentColor,
+                onOpenWallpaper = {
+                    styleOpen = false
+                    wallpaperOpen = true
+                },
                 onClose = { styleOpen = false },
                 onSelect = { selected ->
                     homeStyle = selected
@@ -417,6 +435,26 @@ private fun AstraLauncherApp() {
                 }
             )
         }
+
+        LauncherOverlay(
+            visible = wallpaperOpen,
+            onClose = { wallpaperOpen = false }
+        ) {
+            WallpaperSettingsSheet(
+                dimPercent = wallpaperDimPercent,
+                accentColor = accentColor,
+                onDimChange = { value ->
+                    wallpaperDimPercent = value.coerceIn(0, 70)
+                    launcherPreferences.edit()
+                        .putInt("wallpaper_dim_percent", wallpaperDimPercent)
+                        .apply()
+                },
+                onWallpaperChanged = {
+                    wallpaperRevision += 1
+                },
+                onClose = { wallpaperOpen = false }
+            )
+        }
     }
 }
 
@@ -446,6 +484,7 @@ private fun HomeScreen(
     homeStyle: HomeStyle,
     railIds: List<String>,
     accentColor: Color,
+    wallpaperDimPercent: Int,
     onOpenDrawer: () -> Unit,
     onOpenSearch: () -> Unit,
     onOpenWeather: () -> Unit,
@@ -461,7 +500,7 @@ private fun HomeScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF08090C))
+            .background(Color.Transparent)
             .pointerInput(Unit) {
                 detectVerticalDragGestures(
                     onVerticalDrag = { _, amount -> dragAmount += amount },
@@ -473,6 +512,16 @@ private fun HomeScreen(
                 )
             }
     ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Color.Black.copy(
+                        alpha = (wallpaperDimPercent.coerceIn(0, 70) / 100f)
+                    )
+                )
+        )
+
         when (homeStyle) {
             HomeStyle.EDGE -> {
                 Box(
@@ -798,6 +847,7 @@ private fun StyleChooserSheet(
     drawerIconSizeDp: Int,
     adaptiveAccent: Boolean,
     accentColor: Color,
+    onOpenWallpaper: () -> Unit,
     onClose: () -> Unit,
     onSelect: (HomeStyle) -> Unit,
     onRailChange: (List<String>) -> Unit,
@@ -832,7 +882,7 @@ private fun StyleChooserSheet(
                     Column {
                         Text("ASTRA Customize", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
                         Text(
-                            "Style · Rail · Grid · Adaptive accent",
+                            "Style · Wallpaper · Rail · Grid · Accent",
                             color = accentColor.copy(alpha = 0.92f),
                             fontSize = 11.sp,
                             letterSpacing = 0.7.sp
@@ -854,6 +904,48 @@ private fun StyleChooserSheet(
                         Text(style.description, color = Color.White.copy(alpha = 0.43f), fontSize = 11.sp, lineHeight = 16.sp)
                     }
                     SelectionBadge(selected, accentColor)
+                }
+            }
+
+            item {
+                Spacer(Modifier.height(6.dp))
+                SettingsSectionLabel("WALLPAPER")
+                Spacer(Modifier.height(8.dp))
+
+                SettingsCard(false, accentColor, onOpenWallpaper) {
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    listOf(
+                                        Color(0xFF16191E),
+                                        accentColor.copy(alpha = 0.92f)
+                                    )
+                                )
+                            )
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Wallpaper & background",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            "Gallery · ASTRA presets · Home / Lock · Dim",
+                            color = Color.White.copy(alpha = 0.38f),
+                            fontSize = 10.sp
+                        )
+                    }
+                    Text(
+                        "→",
+                        color = accentColor,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
 
