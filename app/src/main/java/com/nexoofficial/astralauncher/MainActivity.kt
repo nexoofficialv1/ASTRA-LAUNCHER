@@ -3,6 +3,8 @@ package com.nexoofficial.astralauncher
 import android.Manifest
 import android.app.role.RoleManager
 import android.app.WallpaperManager
+import android.appwidget.AppWidgetHost
+import android.appwidget.AppWidgetManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -72,6 +74,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -106,6 +109,9 @@ import com.nexoofficial.astralauncher.weather.LocationService
 import com.nexoofficial.astralauncher.weather.WeatherCodeMapper
 import com.nexoofficial.astralauncher.weather.WeatherRepository
 import com.nexoofficial.astralauncher.wallpaper.WallpaperSettingsSheet
+import com.nexoofficial.astralauncher.widget.AstraWidgetType
+import com.nexoofficial.astralauncher.widget.HomeWidgetSlot
+import com.nexoofficial.astralauncher.widget.WidgetSettingsSheet
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -142,6 +148,13 @@ private fun AstraLauncherApp() {
     val locationService = remember { LocationService(context) }
     val weatherRepository = remember { WeatherRepository(context) }
     val searchEngine = remember { UniversalSearchEngine() }
+    val appWidgetManager = remember { AppWidgetManager.getInstance(context) }
+    val appWidgetHost = remember { AppWidgetHost(context, 2606) }
+
+    DisposableEffect(appWidgetHost) {
+        appWidgetHost.startListening()
+        onDispose { appWidgetHost.stopListening() }
+    }
 
     var drawerOpen by remember { mutableStateOf(false) }
     var searchOpen by remember { mutableStateOf(false) }
@@ -166,6 +179,12 @@ private fun AstraLauncherApp() {
         )
     }
     var wallpaperRevision by remember { mutableStateOf(0) }
+
+    var widgetOpen by remember { mutableStateOf(false) }
+    var widgetType by remember { mutableStateOf(AstraWidgetType.fromStorage(launcherPreferences.getString("home_widget_type", null))) }
+    var widgetId by remember { mutableStateOf(launcherPreferences.getInt("home_widget_id", AppWidgetManager.INVALID_APPWIDGET_ID)) }
+    var widgetHeightDp by remember { mutableStateOf(launcherPreferences.getInt("home_widget_height_dp", 110).coerceIn(100, 210)) }
+    var pendingWidgetId by remember { mutableStateOf(AppWidgetManager.INVALID_APPWIDGET_ID) }
 
     var railIds by remember {
         mutableStateOf(readRailIds(launcherPreferences.getString("rail_ids", null)))
@@ -233,9 +252,67 @@ private fun AstraLauncherApp() {
         if (hasLocationPermission()) refreshWeather(forceNetwork = false)
     }
 
+    fun clearHomeWidget() {
+        if (widgetId != AppWidgetManager.INVALID_APPWIDGET_ID) runCatching { appWidgetHost.deleteAppWidgetId(widgetId) }
+        widgetId = AppWidgetManager.INVALID_APPWIDGET_ID
+        widgetType = AstraWidgetType.NONE
+        launcherPreferences.edit().remove("home_widget_id").putString("home_widget_type", AstraWidgetType.NONE.name).apply()
+    }
+
+    fun activateNativeWidget(type: AstraWidgetType) {
+        if (widgetId != AppWidgetManager.INVALID_APPWIDGET_ID) runCatching { appWidgetHost.deleteAppWidgetId(widgetId) }
+        widgetId = AppWidgetManager.INVALID_APPWIDGET_ID
+        widgetType = type
+        launcherPreferences.edit().remove("home_widget_id").putString("home_widget_type", type.name).apply()
+    }
+
+    fun activateThirdPartyWidget(id: Int) {
+        if (widgetId != AppWidgetManager.INVALID_APPWIDGET_ID && widgetId != id) runCatching { appWidgetHost.deleteAppWidgetId(widgetId) }
+        widgetId = id
+        widgetType = AstraWidgetType.THIRD_PARTY
+        pendingWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID
+        launcherPreferences.edit().putInt("home_widget_id", id).putString("home_widget_type", AstraWidgetType.THIRD_PARTY.name).apply()
+    }
+
     val roleLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { }
+
+    val configureWidgetLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val id = result.data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, pendingWidgetId) ?: pendingWidgetId
+        if (result.resultCode == android.app.Activity.RESULT_OK && id != AppWidgetManager.INVALID_APPWIDGET_ID) activateThirdPartyWidget(id)
+        else {
+            if (id != AppWidgetManager.INVALID_APPWIDGET_ID) runCatching { appWidgetHost.deleteAppWidgetId(id) }
+            pendingWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID
+        }
+    }
+
+    val widgetPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val id = result.data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, pendingWidgetId) ?: pendingWidgetId
+        if (result.resultCode == android.app.Activity.RESULT_OK && id != AppWidgetManager.INVALID_APPWIDGET_ID) {
+            val info = appWidgetManager.getAppWidgetInfo(id)
+            if (info == null) {
+                runCatching { appWidgetHost.deleteAppWidgetId(id) }
+                pendingWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID
+                Toast.makeText(context, "Widget provider is unavailable.", Toast.LENGTH_SHORT).show()
+            } else if (info.configure != null) {
+                pendingWidgetId = id
+                runCatching {
+                    configureWidgetLauncher.launch(Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE).apply {
+                        component = info.configure
+                        putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                    })
+                }.onFailure { activateThirdPartyWidget(id) }
+            } else activateThirdPartyWidget(id)
+        } else {
+            if (id != AppWidgetManager.INVALID_APPWIDGET_ID) runCatching { appWidgetHost.deleteAppWidgetId(id) }
+            pendingWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID
+        }
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -243,6 +320,20 @@ private fun AstraLauncherApp() {
         val granted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
             permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
         if (granted) refreshWeather(forceNetwork = true)
+    }
+
+    fun beginWidgetPicker() {
+        val id = appWidgetHost.allocateAppWidgetId()
+        pendingWidgetId = id
+        runCatching {
+            widgetPickerLauncher.launch(Intent(AppWidgetManager.ACTION_APPWIDGET_PICK).apply {
+                putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+            })
+        }.onFailure {
+            runCatching { appWidgetHost.deleteAppWidgetId(id) }
+            pendingWidgetId = AppWidgetManager.INVALID_APPWIDGET_ID
+            Toast.makeText(context, "Android widget picker is unavailable.", Toast.LENGTH_LONG).show()
+        }
     }
 
     fun requestHomeRole() {
@@ -324,6 +415,12 @@ private fun AstraLauncherApp() {
             railIds = railIds,
             accentColor = accentColor,
             wallpaperDimPercent = wallpaperDimPercent,
+            widgetType = widgetType,
+            widgetId = widgetId,
+            widgetHeightDp = widgetHeightDp,
+            appWidgetHost = appWidgetHost,
+            appWidgetManager = appWidgetManager,
+            onManageWidget = { widgetOpen = true },
             onOpenDrawer = { drawerOpen = true },
             onOpenSearch = { searchOpen = true },
             onOpenWeather = {
@@ -394,6 +491,10 @@ private fun AstraLauncherApp() {
                     styleOpen = false
                     wallpaperOpen = true
                 },
+                onOpenWidgets = {
+                    styleOpen = false
+                    widgetOpen = true
+                },
                 onClose = { styleOpen = false },
                 onSelect = { selected ->
                     homeStyle = selected
@@ -455,6 +556,25 @@ private fun AstraLauncherApp() {
                 onClose = { wallpaperOpen = false }
             )
         }
+
+        LauncherOverlay(
+            visible = widgetOpen,
+            onClose = { widgetOpen = false }
+        ) {
+            WidgetSettingsSheet(
+                currentType = widgetType,
+                currentHeightDp = widgetHeightDp,
+                accentColor = accentColor,
+                onPickSystemWidget = { widgetOpen = false; beginWidgetPicker() },
+                onSelectNative = { activateNativeWidget(it) },
+                onHeightChange = { height ->
+                    widgetHeightDp = height.coerceIn(100, 210)
+                    launcherPreferences.edit().putInt("home_widget_height_dp", widgetHeightDp).apply()
+                },
+                onRemove = { clearHomeWidget() },
+                onClose = { widgetOpen = false }
+            )
+        }
     }
 }
 
@@ -485,6 +605,12 @@ private fun HomeScreen(
     railIds: List<String>,
     accentColor: Color,
     wallpaperDimPercent: Int,
+    widgetType: AstraWidgetType,
+    widgetId: Int,
+    widgetHeightDp: Int,
+    appWidgetHost: AppWidgetHost,
+    appWidgetManager: AppWidgetManager,
+    onManageWidget: () -> Unit,
     onOpenDrawer: () -> Unit,
     onOpenSearch: () -> Unit,
     onOpenWeather: () -> Unit,
@@ -638,6 +764,19 @@ private fun HomeScreen(
                         onLaunchApp = onLaunchApp
                     )
                 }
+            }
+
+            if (widgetType != AstraWidgetType.NONE) {
+                HomeWidgetSlot(
+                    type = widgetType,
+                    appWidgetId = widgetId,
+                    host = appWidgetHost,
+                    manager = appWidgetManager,
+                    weather = weather,
+                    accentColor = accentColor,
+                    heightDp = widgetHeightDp,
+                    onManage = onManageWidget
+                )
             }
 
             Column {
@@ -848,6 +987,7 @@ private fun StyleChooserSheet(
     adaptiveAccent: Boolean,
     accentColor: Color,
     onOpenWallpaper: () -> Unit,
+    onOpenWidgets: () -> Unit,
     onClose: () -> Unit,
     onSelect: (HomeStyle) -> Unit,
     onRailChange: (List<String>) -> Unit,
@@ -882,7 +1022,7 @@ private fun StyleChooserSheet(
                     Column {
                         Text("ASTRA Customize", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
                         Text(
-                            "Style · Wallpaper · Rail · Grid · Accent",
+                            "Style · Wallpaper · Widgets · Rail · Grid · Accent",
                             color = accentColor.copy(alpha = 0.92f),
                             fontSize = 11.sp,
                             letterSpacing = 0.7.sp
@@ -966,6 +1106,24 @@ private fun StyleChooserSheet(
                         )
                     }
                     SelectionBadge(adaptiveAccent, accentColor)
+                }
+            }
+
+            item {
+                Spacer(Modifier.height(6.dp))
+                SettingsSectionLabel("WIDGETS")
+                Spacer(Modifier.height(8.dp))
+                SettingsCard(false, accentColor, onOpenWidgets) {
+                    Box(
+                        modifier = Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(accentColor.copy(alpha = 0.14f)),
+                        contentAlignment = Alignment.Center
+                    ) { Text("W", color = accentColor, fontWeight = FontWeight.Black, fontSize = 15.sp) }
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Home widgets", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        Text("ASTRA + installed Android widgets", color = Color.White.copy(alpha = 0.38f), fontSize = 10.sp)
+                    }
+                    Text("→", color = accentColor, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 }
             }
 
